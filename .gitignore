@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Streamlit/local runtime
+.streamlit/secrets.toml
+
+# Personal Garmin exports and generated private data
+*.zip
+data/raw/*.zip
+data/processed/*.csv
+data/processed/*.json
+
+# Local OS/editor files
+.DS_Store
+.idea/
+.vscode/
