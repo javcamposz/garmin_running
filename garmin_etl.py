@@ -154,14 +154,24 @@ def _activity_category(name: str, activity_type: str) -> str:
     label = (name or "").lower()
     if activity_type == "treadmill_running":
         return "Treadmill"
-    if "race" in label:
-        return "Race"
     if "recovery" in label:
         return "Recovery"
     if "long" in label:
         return "Long"
-    if any(token in label for token in ("interval", "repeat", "benchmark", "tempo", "threshold")):
+    workout_tokens = (
+        "interval",
+        "repeat",
+        "benchmark",
+        "tempo",
+        "threshold",
+        "workout",
+        "fartlek",
+        "farklet",
+    )
+    if any(token in label for token in workout_tokens):
         return "Workout"
+    if "race" in label and "pre-race" not in label:
+        return "Race"
     if "base" in label:
         return "Base"
     return "Run"
@@ -410,10 +420,6 @@ def build_weekly_summary(activities: pd.DataFrame) -> pd.DataFrame:
         hr_zone_5_min=("hr_zone_5_min", "sum"),
         hr_zone_6_min=("hr_zone_6_min", "sum"),
     )
-    weekly["duration_h"] = weekly["duration_min"] / 60
-    weekly["avg_pace_min_per_km"] = weekly["duration_min"] / weekly["distance_km"]
-    weekly["avg_pace"] = weekly["avg_pace_min_per_km"].apply(format_pace)
-
     avg_hr_rows = []
     for week_start, week_df in valid.groupby("week_start_dt"):
         avg_hr_rows.append(
@@ -423,6 +429,32 @@ def build_weekly_summary(activities: pd.DataFrame) -> pd.DataFrame:
             }
         )
     weekly = weekly.merge(pd.DataFrame(avg_hr_rows), on="week_start_dt", how="left")
+    all_weeks = pd.date_range(
+        valid["week_start_dt"].min(), valid["week_start_dt"].max(), freq="W-MON"
+    )
+    weekly = (
+        weekly.set_index("week_start_dt")
+        .reindex(all_weeks)
+        .rename_axis("week_start_dt")
+        .reset_index()
+    )
+    zero_fill_columns = [
+        "runs",
+        "distance_km",
+        "duration_min",
+        "long_run_km",
+        "elevation_gain_m",
+        "calories_kcal",
+        "training_effect_sum",
+        *[f"hr_zone_{zone}_min" for zone in range(7)],
+    ]
+    weekly[zero_fill_columns] = weekly[zero_fill_columns].fillna(0)
+    weekly["runs"] = weekly["runs"].astype(int)
+    weekly["duration_h"] = weekly["duration_min"] / 60
+    weekly["avg_pace_min_per_km"] = weekly["duration_min"] / weekly[
+        "distance_km"
+    ].replace(0, pd.NA)
+    weekly["avg_pace"] = weekly["avg_pace_min_per_km"].apply(format_pace)
     weekly["hr_high_min"] = weekly[["hr_zone_4_min", "hr_zone_5_min", "hr_zone_6_min"]].sum(axis=1)
     weekly["hr_zone_total_min"] = weekly[[f"hr_zone_{zone}_min" for zone in range(7)]].sum(axis=1)
     weekly["hr_high_share"] = weekly["hr_high_min"] / weekly["hr_zone_total_min"].replace(0, pd.NA)

@@ -165,6 +165,15 @@ def duration_from_minutes(minutes: float | None) -> str:
     return format_duration(float(minutes) * 60)
 
 
+def display_date(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return parsed.strftime("%d %b %Y")
+
+
 def metric_delta(current: float, previous: float, suffix: str = "") -> str | None:
     if pd.isna(current) or pd.isna(previous):
         return None
@@ -851,6 +860,16 @@ def main() -> None:
     latest_vo2 = latest_row(vo2, "calendarDate")
     latest_prediction = latest_row(race_predictions, "calendarDate")
     latest_training = latest_row(training, "calendarDate")
+    latest_vo2_date = (
+        display_date(latest_vo2["calendarDate"])
+        if latest_vo2 is not None and "calendarDate" in latest_vo2
+        else ""
+    )
+    latest_prediction_date = (
+        display_date(latest_prediction["calendarDate"])
+        if latest_prediction is not None and "calendarDate" in latest_prediction
+        else ""
+    )
     latest_half = insights.get("half_marathon", {}).get("latest", {})
     best_half = insights.get("half_marathon", {}).get("best", {})
     cambridge_target_pace = CAMBRIDGE_2027_TARGET_MINUTES / HALF_MARATHON_KM
@@ -906,13 +925,16 @@ def main() -> None:
         st.metric("Last 8-week longest", f"{recent_8['distance_km'].max():.1f} km")
     with kpi_3:
         st.metric(
-            "VO2 max",
+            "Latest VO2 max",
             f"{latest_vo2['vo2MaxValue']:.0f}"
             if latest_vo2 is not None
             and "vo2MaxValue" in latest_vo2
             and not pd.isna(latest_vo2["vo2MaxValue"])
             else "",
+            help="Latest VO2 max record found in the uploaded Garmin export.",
         )
+        if latest_vo2_date:
+            st.caption(f"Latest record: {latest_vo2_date}")
     with kpi_4:
         pred = (
             format_duration(latest_prediction["raceTimeHalf"])
@@ -921,7 +943,9 @@ def main() -> None:
             and not pd.isna(latest_prediction["raceTimeHalf"])
             else ""
         )
-        st.metric("Garmin HM prediction", pred)
+        st.metric("Garmin predicted HM", pred, help="Garmin race prediction, not a completed race activity.")
+        if pred and latest_prediction_date:
+            st.caption(f"Prediction date: {latest_prediction_date}")
     with kpi_5:
         load_label = latest_training["trainingStatus"] if latest_training is not None and "trainingStatus" in latest_training else ""
         load_value = (
@@ -956,8 +980,18 @@ def main() -> None:
             st.write(f"Valid running activities: **{data_insights.get('valid_running_activities', len(valid_activities)):,}**")
             st.write(f"Valid distance: **{data_insights.get('total_valid_distance_km', valid_activities['distance_km'].sum()):,.0f} km**")
             st.write(f"Flagged outliers: **{data_insights.get('flagged_outliers', 0)}**")
-            st.write(f"Latest half marathon: {latest_half.get('time', '')} at {latest_half.get('pace', '')}")
-            st.write(f"Best half marathon in data: {best_half.get('time', '')} at {best_half.get('pace', '')}")
+            latest_half_date = display_date(latest_half.get("date"))
+            best_half_date = display_date(best_half.get("date"))
+            st.write(
+                f"Latest completed HM effort: {latest_half.get('time', '')} "
+                f"at {latest_half.get('pace', '')}"
+                f"{f' ({latest_half_date})' if latest_half_date else ''}"
+            )
+            st.write(
+                f"Best completed HM effort: {best_half.get('time', '')} "
+                f"at {best_half.get('pace', '')}"
+                f"{f' ({best_half_date})' if best_half_date else ''}"
+            )
 
         insight_cols = st.columns(2)
         with insight_cols[0]:
@@ -1108,16 +1142,22 @@ def main() -> None:
                 fig_vo2 = px.line(vo2_filtered, x="calendarDate", y="vo2MaxValue", markers=True)
                 fig_vo2.update_layout(height=330, margin=dict(l=10, r=10, t=25, b=10), xaxis_title=None, yaxis_title="VO2 max")
                 st.plotly_chart(fig_vo2, use_container_width=True)
+                if latest_vo2_date:
+                    st.caption(
+                        f"Latest VO2 max in this export: {latest_vo2['vo2MaxValue']:.0f} "
+                        f"on {latest_vo2_date}."
+                    )
 
         with right:
-            st.subheader("Race Predictions")
+            st.subheader("Garmin Race Predictions")
+            st.caption("Prediction rows are Garmin estimates, not completed race activities.")
             pred_filtered = filter_by_date(race_predictions, "calendarDate", start_filter, end_filter)
             fig_pred = go.Figure()
             for col, label in [
-                ("raceTime5K_min", "5K"),
-                ("raceTime10K_min", "10K"),
-                ("raceTimeHalf_min", "Half"),
-                ("raceTimeMarathon_min", "Marathon"),
+                ("raceTime5K_min", "Predicted 5K"),
+                ("raceTime10K_min", "Predicted 10K"),
+                ("raceTimeHalf_min", "Predicted half"),
+                ("raceTimeMarathon_min", "Predicted marathon"),
             ]:
                 if col in pred_filtered:
                     fig_pred.add_trace(go.Scatter(x=pred_filtered["calendarDate"], y=pred_filtered[col], mode="lines", name=label))
@@ -1126,12 +1166,14 @@ def main() -> None:
             fig_pred.update_layout(height=330, margin=dict(l=10, r=10, t=25, b=10), xaxis_title=None, yaxis_title="minutes")
             st.plotly_chart(fig_pred, use_container_width=True)
 
+        race_category = pd.Series(False, index=valid_activities.index)
+        if "activity_category" in valid_activities:
+            race_category = valid_activities["activity_category"].eq("Race")
         race_like = valid_activities[
-            valid_activities["name"].fillna("").str.contains("race", case=False)
-            | valid_activities["distance_km"].between(20.8, 21.5)
+            race_category | valid_activities["distance_km"].between(20.8, 21.5)
         ].copy()
         race_like["time"] = race_like["moving_min"].apply(duration_from_minutes)
-        st.subheader("Race-Like Runs")
+        st.subheader("Completed Race and Half-Distance Efforts")
         st.dataframe(
             race_like.sort_values("start_time_local", ascending=False)[
                 ["start_time_local", "name", "distance_km", "time", "pace", "avg_hr", "max_hr"]
@@ -1202,19 +1244,39 @@ def main() -> None:
             if latest_vo2 is not None and "vo2MaxValue" in latest_vo2 and not pd.isna(latest_vo2["vo2MaxValue"])
             else np.nan
         )
-        peak_vo2 = float(vo2["vo2MaxValue"].max()) if not vo2.empty and "vo2MaxValue" in vo2.columns else np.nan
-        peak_vo2_date = (
-            vo2.sort_values("vo2MaxValue", ascending=False).iloc[0]["calendarDate"].date()
-            if not vo2.empty and {"vo2MaxValue", "calendarDate"}.issubset(vo2.columns)
-            else None
-        )
+        peak_vo2 = np.nan
+        peak_vo2_date = None
+        recent_peak_vo2 = np.nan
+        recent_peak_vo2_date = None
+        if not vo2.empty and {"vo2MaxValue", "calendarDate"}.issubset(vo2.columns):
+            peak_vo2_row = vo2.sort_values(
+                ["vo2MaxValue", "calendarDate"], ascending=[False, False]
+            ).iloc[0]
+            peak_vo2 = float(peak_vo2_row["vo2MaxValue"])
+            peak_vo2_date = peak_vo2_row["calendarDate"].date()
+            latest_vo2_dt = (
+                pd.to_datetime(latest_vo2["calendarDate"], errors="coerce")
+                if latest_vo2 is not None and "calendarDate" in latest_vo2
+                else pd.NaT
+            )
+            recent_vo2 = vo2.copy()
+            if not pd.isna(latest_vo2_dt):
+                recent_vo2 = recent_vo2[recent_vo2["calendarDate"] >= latest_vo2_dt - pd.Timedelta(weeks=52)]
+            if not recent_vo2.empty:
+                recent_peak_row = recent_vo2.sort_values(
+                    ["vo2MaxValue", "calendarDate"], ascending=[False, False]
+                ).iloc[0]
+                recent_peak_vo2 = float(recent_peak_row["vo2MaxValue"])
+                recent_peak_vo2_date = recent_peak_row["calendarDate"].date()
 
         zone_cols = st.columns(5)
         zone_cols[0].metric("Easy pace now", easy_guidance["easy_range"])
         zone_cols[1].metric("Recovery pace", easy_guidance["recovery_range"])
         zone_cols[2].metric("Easy HR cap", f"{easy_guidance['hr_cap']:.0f} bpm")
         zone_cols[3].metric("Current VO2 max", f"{current_vo2:.0f}" if not pd.isna(current_vo2) else "")
-        zone_cols[4].metric("Historical peak", f"{peak_vo2:.0f}" if not pd.isna(peak_vo2) else "")
+        zone_cols[4].metric("Recent VO2 peak", f"{recent_peak_vo2:.0f}" if not pd.isna(recent_peak_vo2) else "")
+        if latest_vo2_date:
+            st.caption(f"Current VO2 max is the latest record in this export: {latest_vo2_date}.")
 
         left, right = st.columns([1, 1])
         with left:
@@ -1287,7 +1349,13 @@ def main() -> None:
                 fig_vo2_full = empty_figure("No VO2 max history")
             else:
                 fig_vo2_full = px.line(vo2, x="calendarDate", y="vo2MaxValue", markers=False)
-                fig_vo2_full.add_hline(y=52, line_dash="dot", line_color="#C1666B", annotation_text="52 target")
+                if not pd.isna(recent_peak_vo2):
+                    fig_vo2_full.add_hline(
+                        y=recent_peak_vo2,
+                        line_dash="dot",
+                        line_color="#C1666B",
+                        annotation_text="recent peak",
+                    )
                 if not pd.isna(current_vo2):
                     fig_vo2_full.add_hline(y=current_vo2, line_dash="dot", line_color="#2B7A78", annotation_text="current")
                 fig_vo2_full.update_layout(
@@ -1298,12 +1366,19 @@ def main() -> None:
                 )
             st.plotly_chart(fig_vo2_full, use_container_width=True)
         with vo2_right:
-            if not pd.isna(peak_vo2):
-                st.write(f"Peak recorded VO2 max: **{peak_vo2:.0f}** on **{peak_vo2_date}**.")
-            else:
+            if not pd.isna(recent_peak_vo2):
+                st.write(f"Recent peak VO2 max: **{recent_peak_vo2:.0f}** on **{recent_peak_vo2_date}**.")
+            if not pd.isna(peak_vo2) and not pd.isna(recent_peak_vo2) and peak_vo2 > recent_peak_vo2:
+                st.write(f"All-time peak in this export: **{peak_vo2:.0f}** on **{peak_vo2_date}**.")
+            if pd.isna(peak_vo2):
                 st.write("No VO2 max history was found in this export.")
+            if not pd.isna(current_vo2) and not pd.isna(recent_peak_vo2):
+                st.write(
+                    f"Short-term target: rebuild from **{current_vo2:.0f}** toward "
+                    f"the recent peak of **{recent_peak_vo2:.0f}**. "
+                    "Treat higher VO2 goals as later-stage targets after the return-to-running block is stable."
+                )
             st.write(
-                "A return from 47 to 52 is ambitious but plausible over months, not weeks. "
                 "Garmin's estimate usually improves when you can run faster at the same HR, "
                 "or hold the same pace at a lower HR."
             )
@@ -1354,7 +1429,7 @@ def main() -> None:
                 },
             ]
         )
-        st.subheader("Training Levers To Move VO2 Max Toward 52")
+        st.subheader("Training Levers To Rebuild VO2 Max")
         st.dataframe(vo2_actions, hide_index=True, use_container_width=True)
 
         st.info(
@@ -1624,6 +1699,38 @@ def main() -> None:
         )
 
     with data_tab:
+        st.subheader("Data Freshness")
+        freshness = pd.DataFrame(
+            [
+                {
+                    "table": "Running activities",
+                    "latest_record": display_date(latest_activity),
+                    "latest_value": "",
+                },
+                {
+                    "table": "VO2 max history",
+                    "latest_record": latest_vo2_date,
+                    "latest_value": (
+                        f"{latest_vo2['vo2MaxValue']:.0f}"
+                        if latest_vo2 is not None
+                        and "vo2MaxValue" in latest_vo2
+                        and not pd.isna(latest_vo2["vo2MaxValue"])
+                        else ""
+                    ),
+                },
+                {
+                    "table": "Garmin race predictions",
+                    "latest_record": latest_prediction_date,
+                    "latest_value": pred,
+                },
+            ]
+        )
+        st.dataframe(freshness, hide_index=True, use_container_width=True)
+        st.caption(
+            "Race prediction rows are estimates from Garmin, not completed race activities. "
+            "If Garmin Connect shows newer VO2 max rows than this table, upload a newer Garmin export."
+        )
+
         st.subheader("Full Running Data")
         cols = [
             "start_time_local",
