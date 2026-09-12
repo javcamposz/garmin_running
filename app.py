@@ -12,6 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from demo_data import build_demo_export
 from garmin_etl import (
     DEFAULT_GOAL_MINUTES,
     HALF_MARATHON_KM,
@@ -59,6 +60,11 @@ def load_json(path: str, mtime: float) -> dict:
 def load_uploaded_export(uploaded_zip: bytes, filename: str) -> dict[str, pd.DataFrame | dict]:
     del filename
     return build_garmin_data(uploaded_zip)
+
+
+@st.cache_data(show_spinner=False)
+def load_demo_data() -> dict[str, pd.DataFrame | dict]:
+    return build_garmin_data(build_demo_export())
 
 
 def ensure_processed_data() -> None:
@@ -719,21 +725,33 @@ def plan_weeks_from_dates(start: date, race: date) -> int:
 def main() -> None:
     with st.sidebar:
         st.header("Data source")
-        uploaded_export = st.file_uploader(
-            "Garmin export .zip",
-            type="zip",
-            help="Upload the full Garmin Account Management export. It is processed in memory for this session.",
+        source_mode = st.radio(
+            "Mode",
+            ["Demo data", "Upload Garmin export", "Local files"],
+            help="Demo data is synthetic. Uploaded files remain in memory for this browser session.",
         )
-        if uploaded_export is not None:
-            st.caption("Using the uploaded export for this browser session.")
+        uploaded_export = None
+        if source_mode == "Upload Garmin export":
+            uploaded_export = st.file_uploader(
+                "Garmin export .zip",
+                type="zip",
+                help="Upload the full Garmin Account Management export.",
+            )
+            if uploaded_export is not None:
+                st.caption("Using the uploaded export for this browser session.")
+        elif source_mode == "Demo data":
+            st.caption("Using deterministic synthetic runs. No personal data is included.")
         else:
-            st.caption("Using local processed files, or a local Garmin export in data/raw/ if processing is needed.")
+            st.caption("Using local processed files, or a Garmin export in data/raw/.")
 
     try:
-        data = read_data(
-            uploaded_export.getvalue() if uploaded_export is not None else None,
-            uploaded_export.name if uploaded_export is not None else None,
-        )
+        if source_mode == "Demo data":
+            data = load_demo_data()
+        else:
+            data = read_data(
+                uploaded_export.getvalue() if uploaded_export is not None else None,
+                uploaded_export.name if uploaded_export is not None else None,
+            )
     except FileNotFoundError:
         st.title("Garmin Running Dashboard")
         st.info(
@@ -776,12 +794,12 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Controls")
-        if uploaded_export is None:
+        if source_mode == "Local files":
             if st.button("Rebuild Garmin data", use_container_width=True):
                 extract_garmin_export(find_export_zip(ROOT), PROCESSED)
                 st.cache_data.clear()
                 st.rerun()
-        else:
+        elif source_mode == "Upload Garmin export":
             st.caption("Uploaded data is processed in memory. Rebuild only applies to local files.")
 
         date_range = st.date_input(
@@ -874,7 +892,9 @@ def main() -> None:
     data_insights = insights.get("data", {})
     first_activity = data_insights.get("first_activity_date")
     latest_activity = data_insights.get("activity_data_through")
-    if first_activity and latest_activity:
+    if source_mode == "Demo data":
+        st.caption("Synthetic demo data. Upload your Garmin export to analyse your own history.")
+    elif first_activity and latest_activity:
         st.caption(f"Running history from {first_activity} to {latest_activity}.")
     else:
         st.caption("Running history loaded from the selected Garmin export.")
@@ -936,8 +956,8 @@ def main() -> None:
             st.write(f"Valid running activities: **{data_insights.get('valid_running_activities', len(valid_activities)):,}**")
             st.write(f"Valid distance: **{data_insights.get('total_valid_distance_km', valid_activities['distance_km'].sum()):,.0f} km**")
             st.write(f"Flagged outliers: **{data_insights.get('flagged_outliers', 0)}**")
-            st.write(f"Latest half marathon: **{latest_half.get('time', '')}** at **{latest_half.get('pace', '')}**")
-            st.write(f"Best half marathon in data: **{best_half.get('time', '')}** at **{best_half.get('pace', '')}**")
+            st.write(f"Latest half marathon: {latest_half.get('time', '')} at {latest_half.get('pace', '')}")
+            st.write(f"Best half marathon in data: {best_half.get('time', '')} at {best_half.get('pace', '')}")
 
         insight_cols = st.columns(2)
         with insight_cols[0]:

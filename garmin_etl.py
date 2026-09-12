@@ -624,6 +624,9 @@ def generate_half_marathon_plan(
     else:
         start = pd.to_datetime(start_date).date()
 
+    if not 1 <= weeks <= 12:
+        raise ValueError("weeks must be between 1 and 12")
+
     guide = PaceGuide(goal_minutes)
     base = max(30.0, float(base_weekly_km))
     multipliers = [0.95, 1.00, 1.08, 0.84, 1.08, 1.16, 1.24, 0.92, 1.25, 1.30, 0.95, 0.72]
@@ -675,11 +678,12 @@ def generate_half_marathon_plan(
     for idx in range(weeks):
         week_start = start + timedelta(days=idx * 7)
         week_end = week_start + timedelta(days=6)
-        multiplier = multipliers[min(idx, len(multipliers) - 1)]
+        template_index = len(multipliers) - 1 if idx == weeks - 1 else idx
+        multiplier = multipliers[template_index]
         distance = round(base * multiplier)
         if idx == weeks - 1:
             distance = max(round(HALF_MARATHON_KM + 8), 29)
-        long_run = long_runs[min(idx, len(long_runs) - 1)]
+        long_run = long_runs[template_index]
         if idx < weeks - 1:
             long_run = min(long_run, max(distance - 14, 10))
         rows.append(
@@ -687,14 +691,14 @@ def generate_half_marathon_plan(
                 "week": idx + 1,
                 "week_start": week_start.isoformat(),
                 "week_end": week_end.isoformat(),
-                "focus": focus[min(idx, len(focus) - 1)],
+                "focus": focus[template_index],
                 "target_km": distance,
                 "long_run_km": round(float(long_run), 1),
                 "easy_pace": guide.range_text(95, 60),
                 "steady_pace": guide.range_text(45, 25),
                 "hm_pace": format_pace(guide.goal_pace),
-                "quality_1": quality_1[min(idx, len(quality_1) - 1)],
-                "quality_2": quality_2[min(idx, len(quality_2) - 1)],
+                "quality_1": quality_1[template_index],
+                "quality_2": quality_2[template_index],
                 "long_run": (
                     "Race day"
                     if idx == weeks - 1

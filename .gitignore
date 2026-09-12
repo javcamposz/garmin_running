@@ -17,3 +17,8 @@ data/processed/*.json
 .DS_Store
 .idea/
 .vscode/
+
+# Test and coverage outputs
+.pytest_cache/
+.coverage
+htmlcov/
